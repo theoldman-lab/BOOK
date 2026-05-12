@@ -26,6 +26,11 @@ SHOW_SOURCE_FILE = False
 # 文件内容前的额外标题级别提升（0 = 不做额外提升）
 # 例如设为 1 则每个文件的 # 标题变为 ##，以此类推
 EXTRA_HEADING_LEVEL = 2
+
+# 分页控制：在标题/文件内容前插入分页标记（用于 PDF 导出时每章独立一页）
+PAGE_BREAK = False
+# 分页标记内容：Typora/浏览器渲染用 HTML+CSS，Pandoc/LaTeX 用 \newpage
+PAGE_BREAK_MARKER = '<div style="page-break-before: always;"></div>'
 # ==============================
 
 
@@ -100,8 +105,17 @@ def get_user_input():
             extra_level = EXTRA_HEADING_LEVEL
     else:
         extra_level = EXTRA_HEADING_LEVEL
-    
-    return content_file, output_file, include_toc, show_source, extra_level
+
+    # 是否启用分页
+    page_break_input = input(f"是否启用分页（章节/大标题前插入分页标记）？(y/n, 默认: {'y' if PAGE_BREAK else 'n'}): ").strip().lower()
+    if page_break_input in ['y', 'yes', '是']:
+        page_break = True
+    elif page_break_input in ['n', 'no', '否']:
+        page_break = False
+    else:
+        page_break = PAGE_BREAK
+
+    return content_file, output_file, include_toc, show_source, extra_level, page_break
 
 
 def url_decode_path(path: str) -> str:
@@ -192,8 +206,8 @@ def adjust_headings(content: str, extra_levels: int) -> str:
     return re.sub(r"^(#{1,6})(\s.*)", _repl, content, flags=re.MULTILINE)
 
 
-def generate_merged(content_file: str, output_file: str, include_toc: bool, 
-                   show_source: bool, extra_level: int):
+def generate_merged(content_file: str, output_file: str, include_toc: bool,
+                   show_source: bool, extra_level: int, page_break: bool = False):
     """主逻辑：解析 Content.md 并生成合并文件"""
     content_dir = os.path.dirname(os.path.abspath(content_file))
     entries = parse_content_file(content_file)
@@ -201,12 +215,23 @@ def generate_merged(content_file: str, output_file: str, include_toc: bool,
     output_lines = []
     toc_lines = []  # 用于生成可选目录
     stats = {"files_merged": 0, "files_missed": 0}
+    last_is_page_break = False  # 跟踪上一行是否为分页符，避免连续插入
+
+    def _maybe_page_break():
+        """若启用了分页且上一行不是分页符，则插入分页标记"""
+        nonlocal last_is_page_break
+        if page_break and output_lines and not last_is_page_break:
+            output_lines.append(PAGE_BREAK_MARKER)
+            output_lines.append("")
+            last_is_page_break = True
 
     for entry in entries:
         if entry["type"] == "heading":
+            _maybe_page_break()
             heading_line = f"{'#' * entry['level']} {entry['text']}"
             output_lines.append(heading_line)
             output_lines.append("")
+            last_is_page_break = False
             if include_toc:
                 # 生成锚点ID（转换为小写，空格替换为连字符）
                 anchor = entry['text'].lower().replace(' ', '-').replace('　', '-')
@@ -230,6 +255,7 @@ def generate_merged(content_file: str, output_file: str, include_toc: bool,
             # output_lines.append("")
 
             if file_path:
+                _maybe_page_break()
                 if show_source:
                     rel_path = os.path.relpath(file_path, content_dir)
                     output_lines.append(f"> *来源: {rel_path}*")
@@ -242,6 +268,7 @@ def generate_merged(content_file: str, output_file: str, include_toc: bool,
                 output_lines.append(content)
                 output_lines.append("")
                 stats["files_merged"] += 1
+                last_is_page_break = False
             else:
                 output_lines.append(f"> *[文件未找到: {link_path}]*")
                 output_lines.append("")
@@ -294,7 +321,7 @@ def quick_mode(content_file=None, output_file=None):
         print(f"错误：Content 文件不存在 - {content_file}")
         return False
     
-    generate_merged(content_file, output_file, INCLUDE_TOC, SHOW_SOURCE_FILE, EXTRA_HEADING_LEVEL)
+    generate_merged(content_file, output_file, INCLUDE_TOC, SHOW_SOURCE_FILE, EXTRA_HEADING_LEVEL, PAGE_BREAK)
     return True
 
 
@@ -312,8 +339,8 @@ def interactive_mode():
         return quick_mode()
     elif choice == '2':
         print("\n进入交互模式...")
-        content_file, output_file, include_toc, show_source, extra_level = get_user_input()
-        generate_merged(content_file, output_file, include_toc, show_source, extra_level)
+        content_file, output_file, include_toc, show_source, extra_level, page_break = get_user_input()
+        generate_merged(content_file, output_file, include_toc, show_source, extra_level, page_break)
         return True
     elif choice == '3':
         print("退出程序。")
@@ -336,10 +363,11 @@ def main():
             return
         
         # 支持更多命令行参数
-        # 用法: python merge.py content.md output.md [--toc] [--source] [--level N]
+        # 用法: python merge.py content.md output.md [--toc] [--source] [--level N] [--page-break]
         include_toc = '--toc' in sys.argv
         show_source = '--source' in sys.argv
-        
+        page_break = '--page-break' in sys.argv
+
         extra_level = EXTRA_HEADING_LEVEL
         for i, arg in enumerate(sys.argv):
             if arg == '--level' and i+1 < len(sys.argv):
@@ -347,8 +375,8 @@ def main():
                     extra_level = int(sys.argv[i+1])
                 except ValueError:
                     pass
-        
-        generate_merged(content_file, output_file, include_toc, show_source, extra_level)
+
+        generate_merged(content_file, output_file, include_toc, show_source, extra_level, page_break)
     else:
         # 无参数时启动交互模式
         interactive_mode()
